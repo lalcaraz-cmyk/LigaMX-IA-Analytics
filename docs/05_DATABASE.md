@@ -2,426 +2,357 @@
 
 ## 1. Purpose
 
-This document defines the entire database design for LigaMX IA Analytics. It describes schema definitions, relationships, constraints, indexes, UUID strategy, audit tables, partitioning, naming conventions, migration strategy, and ER diagrams.
-
-It is aligned with the domain model in `02_DOMAIN_MODEL.md`, the business rules in `03_BUSINESS_RULES.md`, and the API in `07_API_SPEC.md`.
-
-## 2. Database Principles
-
-- Use normalized relational schema for core domain entities.
-- Enforce business invariants at the database layer where possible.
-- Preserve audit history using append-only storage.
-- Optimize query patterns for dashboards, backtests, and predictions.
-- Support long-term growth with partitioning and indexing.
-
-## 3. Schema Overview
-
-The schema includes the following domains:
-- Reference data: `team`, `competition`, `venue`, `player`, `bookmaker`
-- Fixture and market data: `match`, `market`, `odds_snapshot`
-- Prediction and AI: `model_version`, `dataset_snapshot`, `prediction`
-- Portfolio and betting: `portfolio`, `bet`
-- Governance and audit: `audit_record`, `user`
-
-## 4. Tables and Columns
-
-### 4.1 team
-
-- `id` UUID PRIMARY KEY
-- `name` TEXT NOT NULL
-- `short_code` TEXT NOT NULL UNIQUE
-- `country` TEXT NOT NULL
-- `home_advantage` NUMERIC(5,3) NOT NULL DEFAULT 0.0
-- `current_elo` NUMERIC(10,4) NOT NULL DEFAULT 1500.0
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.2 competition
-
-- `id` UUID PRIMARY KEY
-- `name` TEXT NOT NULL
-- `season` TEXT NOT NULL
-- `category` TEXT NOT NULL
-- `start_date` DATE
-- `end_date` DATE
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.3 venue
-
-- `id` UUID PRIMARY KEY
-- `name` TEXT NOT NULL
-- `city` TEXT NOT NULL
-- `country` TEXT NOT NULL
-- `capacity` INTEGER
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.4 player
-
-- `id` UUID PRIMARY KEY
-- `team_id` UUID NOT NULL REFERENCES team(id)
-- `name` TEXT NOT NULL
-- `position` TEXT NOT NULL
-- `rating` NUMERIC(5,2)
-- `status` TEXT NOT NULL CHECK (status IN ('active','injured','suspended'))
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.5 bookmaker
-
-- `id` UUID PRIMARY KEY
-- `name` TEXT NOT NULL UNIQUE
-- `website` TEXT
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.6 match
-
-- `id` UUID PRIMARY KEY
-- `home_team_id` UUID NOT NULL REFERENCES team(id)
-- `away_team_id` UUID NOT NULL REFERENCES team(id)
-- `competition_id` UUID NOT NULL REFERENCES competition(id)
-- `venue_id` UUID REFERENCES venue(id)
-- `kickoff_at` TIMESTAMPTZ NOT NULL
-- `status` TEXT NOT NULL CHECK (status IN ('scheduled','in_progress','finished','cancelled'))
-- `home_score` INTEGER DEFAULT 0
-- `away_score` INTEGER DEFAULT 0
-- `source` TEXT NOT NULL
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-Constraints:
-- UNIQUE (`home_team_id`,`away_team_id`,`kickoff_at`,`competition_id`)
-- CHECK (`home_team_id <> away_team_id`)
-
-Indexes:
-- `match_kickoff_idx` ON (`kickoff_at`)
-- `match_status_idx` ON (`status`)
-- `match_team_idx` ON (`home_team_id`, `away_team_id`)
-
-### 4.7 odds_snapshot
-
-- `id` UUID PRIMARY KEY
-- `match_id` UUID NOT NULL REFERENCES match(id)
-- `bookmaker_id` UUID NOT NULL REFERENCES bookmaker(id)
-- `market_type` TEXT NOT NULL CHECK (market_type IN ('1X2','OverUnder','CorrectScore','AsianHandicap'))
-- `odds_home` NUMERIC(8,4)
-- `odds_draw` NUMERIC(8,4)
-- `odds_away` NUMERIC(8,4)
-- `line_value` NUMERIC(6,3)
-- `implied_home_prob` NUMERIC(8,6)
-- `implied_draw_prob` NUMERIC(8,6)
-- `implied_away_prob` NUMERIC(8,6)
-- `normalized_implied_proba` JSONB
-- `timestamp` TIMESTAMPTZ NOT NULL
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-Indexes:
-- `odds_match_timestamp_idx` ON (`match_id`,`timestamp`)
-- `odds_bookmaker_idx` ON (`bookmaker_id`)
-
-### 4.8 model_version
-
-- `id` UUID PRIMARY KEY
-- `name` TEXT NOT NULL UNIQUE
-- `description` TEXT
-- `status` TEXT NOT NULL CHECK (status IN ('draft','staging','production','retired'))
-- `dataset_snapshot_id` UUID NOT NULL REFERENCES dataset_snapshot(id)
-- `training_parameters` JSONB NOT NULL
-- `evaluation_metrics` JSONB NOT NULL
-- `release_notes` TEXT
-- `released_at` TIMESTAMPTZ
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-Indexes:
-- `model_status_idx` ON (`status`)
-- `model_dataset_idx` ON (`dataset_snapshot_id`)
-
-### 4.9 dataset_snapshot
-
-- `id` UUID PRIMARY KEY
-- `version` TEXT NOT NULL UNIQUE
-- `source` TEXT NOT NULL
-- `hash` TEXT NOT NULL
-- `metadata` JSONB
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.10 prediction
-
-- `id` UUID PRIMARY KEY
-- `match_id` UUID NOT NULL REFERENCES match(id)
-- `model_version_id` UUID NOT NULL REFERENCES model_version(id)
-- `predicted_home_prob` NUMERIC(8,6) NOT NULL
-- `predicted_draw_prob` NUMERIC(8,6) NOT NULL
-- `predicted_away_prob` NUMERIC(8,6) NOT NULL
-- `expected_goals_home` NUMERIC(8,4) NOT NULL
-- `expected_goals_away` NUMERIC(8,4) NOT NULL
-- `score_distribution` JSONB NOT NULL
-- `calibration_metrics` JSONB NOT NULL
-- `explanation_summary` JSONB NOT NULL
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-Constraints:
-- UNIQUE (`match_id`,`model_version_id`)
-
-Indexes:
-- `prediction_match_model_idx` ON (`match_id`,`model_version_id`)
-- `prediction_created_idx` ON (`created_at`)
-
-### 4.11 portfolio
-
-- `id` UUID PRIMARY KEY
-- `owner_id` UUID NOT NULL REFERENCES "user"(id)
-- `name` TEXT NOT NULL
-- `currency` TEXT NOT NULL
-- `starting_capital` NUMERIC(14,2) NOT NULL
-- `current_balance` NUMERIC(14,2) NOT NULL
-- `available_capital` NUMERIC(14,2) NOT NULL
-- `max_risk_pct` NUMERIC(5,4) NOT NULL
-- `min_kelly_pct` NUMERIC(5,4) NOT NULL
-- `max_bet_pct` NUMERIC(5,4) NOT NULL
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-### 4.12 bet
-
-- `id` UUID PRIMARY KEY
-- `portfolio_id` UUID NOT NULL REFERENCES portfolio(id)
-- `match_id` UUID NOT NULL REFERENCES match(id)
-- `odds_snapshot_id` UUID NOT NULL REFERENCES odds_snapshot(id)
-- `prediction_id` UUID NOT NULL REFERENCES prediction(id)
-- `stake` NUMERIC(14,2) NOT NULL
-- `recommended_stake` NUMERIC(14,2) NOT NULL
-- `odds` NUMERIC(8,4) NOT NULL
-- `edge` NUMERIC(10,6) NOT NULL
-- `expected_value` NUMERIC(10,6) NOT NULL
-- `kelly_fraction` NUMERIC(8,6) NOT NULL
-- `status` TEXT NOT NULL CHECK (status IN ('proposed','placed','settled','rejected'))
-- `outcome` TEXT CHECK (outcome IN ('won','lost','void','pending'))
-- `pnl` NUMERIC(14,2) DEFAULT 0.0
-- `placed_at` TIMESTAMPTZ
-- `settled_at` TIMESTAMPTZ
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-Indexes:
-- `bet_portfolio_status_idx` ON (`portfolio_id`,`status`)
-- `bet_match_idx` ON (`match_id`)
-- `bet_prediction_idx` ON (`prediction_id`)
-
-### 4.13 audit_record
-
-- `id` UUID PRIMARY KEY
-- `entity_type` TEXT NOT NULL
-- `entity_id` UUID NOT NULL
-- `action` TEXT NOT NULL CHECK (action IN ('create','update','generate','simulate','settle','promote'))
-- `payload` JSONB NOT NULL
-- `user_id` UUID REFERENCES "user"(id)
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-Indexes:
-- `audit_entity_idx` ON (`entity_type`,`entity_id`)
-- `audit_user_idx` ON (`user_id`)
-- `audit_created_idx` ON (`created_at`)
-- `audit_payload_gin_idx` ON USING GIN (`payload`)
-
-### 4.14 "user"
-
-- `id` UUID PRIMARY KEY
-- `email` TEXT NOT NULL UNIQUE
-- `full_name` TEXT NOT NULL
-- `role` TEXT NOT NULL CHECK (role IN ('analyst','manager','auditor','admin'))
-- `is_active` BOOLEAN NOT NULL DEFAULT TRUE
-- `created_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-- `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()
-
-## 5. Relationships
-
-- `match` references `team`, `competition`, and `venue`.
-- `odds_snapshot` references `match` and `bookmaker`.
-- `prediction` references `match` and `model_version`.
-- `bet` references `portfolio`, `match`, `odds_snapshot`, and `prediction`.
-- `model_version` references `dataset_snapshot`.
-- `audit_record` references any entity by type and ID.
-
-## 6. Index Strategy
-
-- B-tree indexes on all foreign keys.
-- Composite indexes for match and timestamp lookups.
-- Unique indexes for model version names and match predictions.
-- Partial indexes for open bets and active portfolios.
-- JSONB GIN indexes for audit payloads.
-
-## 7. UUID Strategy
-
-- Use UUIDv4 for all primary keys.
-- Generate identifiers in application code before persistence.
-- Use UUIDs for cross-service correlation and audit tracing.
-
-## 8. Audit Tables and Partitioning
-
-### 8.1 Audit Storage
-
-- `audit_record` is append-only.
-- Audit payloads contain event metadata, calculation context, and user details.
-
-### 8.2 Partitioning Strategy
-
-- Partition `audit_record` by `created_at` monthly or quarterly in production.
-- Partition `odds_snapshot` by `timestamp` year for large datasets.
-- Consider partitioned `prediction` or `bet` tables if scale demands.
-
-## 9. Constraints and Data Integrity
-
-- Foreign key constraints enforce referential integrity.
-- Check constraints validate enums and numeric bounds.
-- Unique constraints prevent duplicate matches, predictions, and model names.
-- Triggers or application logic ensure `home_team_id <> away_team_id`.
-- Database constraints validate portfolio limits and bet amounts where possible.
-
-## 10. Naming Conventions
-
-- Tables use singular nouns: `team`, `match`, `prediction`.
-- Columns use `snake_case`.
-- Primary keys are `id`.
-- Foreign keys follow `{entity}_id`.
-- Index names use `{table}_{columns}_idx`.
-- Constraint names use `{table}_{column}_check` or `{table}_{columns}_key`.
-
-## 11. Migration Strategy
-
-- Use Alembic for schema migrations.
-- Create small, focused migration scripts.
-- Keep migrations reversible when possible.
-- Use data migrations only when needed for schema changes.
-- Test migrations with production-like data.
-
-## 12. ER Diagrams
-
-### 12.1 High-Level ER Diagram
-
-```mermaid
-erDiagram
-    TEAM {
-      UUID id PK
-      TEXT name
-      TEXT short_code
-      NUMERIC current_elo
-    }
-    COMPETITION {
-      UUID id PK
-      TEXT name
-      TEXT season
-    }
-    VENUE {
-      UUID id PK
-      TEXT name
-      TEXT city
-    }
-    MATCH {
-      UUID id PK
-      UUID home_team_id FK
-      UUID away_team_id FK
-      UUID competition_id FK
-      TIMESTAMPTZ kickoff_at
-      TEXT status
-    }
-    BOOKMAKER {
-      UUID id PK
-      TEXT name
-    }
-    ODDS_SNAPSHOT {
-      UUID id PK
-      UUID match_id FK
-      UUID bookmaker_id FK
-      TEXT market_type
-      NUMERIC odds_home
-    }
-    MODEL_VERSION {
-      UUID id PK
-      TEXT name
-      TEXT status
-    }
-    DATASET_SNAPSHOT {
-      UUID id PK
-      TEXT version
-    }
-    PREDICTION {
-      UUID id PK
-      UUID match_id FK
-      UUID model_version_id FK
-      NUMERIC predicted_home_prob
-    }
-    PORTFOLIO {
-      UUID id PK
-      UUID owner_id FK
-      NUMERIC current_balance
-    }
-    BET {
-      UUID id PK
-      UUID portfolio_id FK
-      UUID match_id FK
-      UUID odds_snapshot_id FK
-      UUID prediction_id FK
-      NUMERIC stake
-    }
-    AUDIT_RECORD {
-      UUID id PK
-      TEXT entity_type
-      UUID entity_id
-    }
-    "USER" {
-      UUID id PK
-      TEXT email
-      TEXT role
-    }
-
-    TEAM ||--o{ MATCH : home_team
-    TEAM ||--o{ MATCH : away_team
-    COMPETITION ||--o{ MATCH : competition
-    VENUE ||--o{ MATCH : venue
-    MATCH ||--o{ ODDS_SNAPSHOT : has
-    BOOKMAKER ||--o{ ODDS_SNAPSHOT : provides
-    MATCH ||--o{ PREDICTION : generates
-    MODEL_VERSION ||--o{ PREDICTION : used_by
-    DATASET_SNAPSHOT ||--o{ MODEL_VERSION : trains_on
-    PORTFOLIO ||--o{ BET : holds
-    MATCH ||--o{ BET : relates_to
-    PREDICTION ||--o{ BET : recommends
-    ODDS_SNAPSHOT ||--o{ BET : references
-    "USER" ||--o{ PORTFOLIO : owns
-    "USER" ||--o{ AUDIT_RECORD : creates
-```  
-
-## 13. Maintenance and Operations
-
-- Monitor index usage and query plans.
-- Archive large historical datasets in object storage if necessary.
-- Use read replicas for analytics and reporting workloads.
-- Apply periodic vacuum and analyze operations.
-
-## 14. Security
-
-- Use role-based access at the application layer.
-- Limit database user permissions to required operations.
-- Store secrets outside the repository.
-- Use SSL/TLS for database connections.
-
-## 15. References
-
-- `02_DOMAIN_MODEL.md` for entity definitions and aggregate boundaries.
-- `03_BUSINESS_RULES.md` for integrity and rule enforcement.
-- `04_AI_ENGINE.md` for model storage and prediction artifacts.
-- `06_ARCHITECTURE.md` for persistence integration.
-- `07_API_SPEC.md` for data contracts and payload expectations.
-
-
-- `02_DOMAIN_MODEL.md` for entity relationships and aggregate rules.
-- `03_BUSINESS_RULES.md` for business-level constraints.
-- `04_AI_ENGINE.md` for model versioning and prediction storage.
-- `06_ARCHITECTURE.md` for database integration with service layers.
-- `07_API_SPEC.md` for data contract and query patterns.
+This document defines the PostgreSQL persistence design for LigaMX IA Analytics. It is aligned with the aggregate boundaries in `02_DOMAIN_MODEL.md`, the invariants in `03_BUSINESS_RULES.md`, and the lineage requirements in `04_AI_ENGINE.md`.
+
+The database is the system of record for domain state, model governance, market observations, and audit evidence. Model binaries and large raw source files are stored in object storage; PostgreSQL stores immutable references, hashes, and metadata.
+
+## 2. Principles
+
+- Use normalized relational tables for domain state and append-only records for evidence.
+- Enforce structural invariants in PostgreSQL; enforce cross-aggregate policies in application transactions.
+- Store timestamps as `TIMESTAMPTZ` in UTC and use UUID primary keys.
+- Keep mutable operational records separate from immutable prediction, simulation, model, and audit records.
+- Never overwrite historical odds, feature vectors, predictions, model artifacts, simulations, or backtest results.
+
+## 3. Schemas and Naming
+
+Use the `public` schema for Version 1.0. Tables use singular `snake_case` nouns; identifiers are `id`; foreign keys follow `<entity>_id`. The application-user table is named `app_user` to avoid a quoted SQL keyword.
+
+All mutable tables include `created_at` and `updated_at`. Immutable tables include only `created_at` unless a lifecycle field is explicitly required. A shared trigger maintains `updated_at`.
+
+## 4. Reference and Competition Data
+
+### 4.1 `competition`
+
+- `id UUID PRIMARY KEY`
+- `name TEXT NOT NULL`
+- `country_code CHAR(2) NOT NULL`
+- `category TEXT NOT NULL`
+- timestamps
+
+Unique: `(name, country_code, category)`.
+
+### 4.2 `season`
+
+- `id UUID PRIMARY KEY`
+- `competition_id UUID NOT NULL REFERENCES competition(id)`
+- `name TEXT NOT NULL`
+- `starts_on DATE NOT NULL`
+- `ends_on DATE NOT NULL`
+- timestamps
+
+Check: `ends_on >= starts_on`. Unique: `(competition_id, name)`.
+
+### 4.3 `round`
+
+- `id UUID PRIMARY KEY`
+- `season_id UUID NOT NULL REFERENCES season(id)`
+- `number INTEGER NOT NULL CHECK (number > 0)`
+- `stage TEXT NOT NULL`
+- `name TEXT`
+- timestamps
+
+Unique: `(season_id, number, stage)`.
+
+### 4.4 `team`, `venue`, `player`, and `team_membership`
+
+`team` stores `name`, unique `short_code`, `country_code`, and timestamps. `venue` stores `name`, `city`, `country_code`, capacity, optional latitude/longitude, and timestamps; capacity is positive when present. `player` stores identity attributes, position, and timestamps.
+
+Team assignment is historical. `team_membership` contains `player_id`, `team_id`, `starts_on`, optional `ends_on`, and `status` (`active`, `injured`, `suspended`, `transferred`). It checks dates and uses a partial unique index to allow at most one open membership per player.
+
+## 5. Fixtures and Observations
+
+### 5.1 `match`
+
+- `id UUID PRIMARY KEY`
+- `competition_id UUID NOT NULL REFERENCES competition(id)`
+- `season_id UUID NOT NULL REFERENCES season(id)`
+- `round_id UUID REFERENCES round(id)`
+- `home_team_id UUID NOT NULL REFERENCES team(id)`
+- `away_team_id UUID NOT NULL REFERENCES team(id)`
+- `venue_id UUID REFERENCES venue(id)`
+- `kickoff_at TIMESTAMPTZ NOT NULL`
+- `status TEXT NOT NULL CHECK (status IN ('scheduled','live','finished','cancelled','postponed'))`
+- `home_score SMALLINT`
+- `away_score SMALLINT`
+- `source_external_id TEXT`
+- timestamps
+
+Checks: home and away teams differ; scores are non-negative; scores are both null or both populated; populated scores require status `finished`. Unique: `(competition_id, season_id, home_team_id, away_team_id, kickoff_at)` and, where present, `source_external_id`.
+
+Indexes: `(kickoff_at)`, `(status, kickoff_at)`, `(home_team_id, kickoff_at)`, and `(away_team_id, kickoff_at)`.
+
+### 5.2 `lineup`, `lineup_player`, and statistics
+
+`lineup` captures one team lineup for one match, including `team_id`, `match_id`, `status` (`predicted`, `confirmed`, `final`), `announced_at`, source metadata, and timestamps. `lineup_player` references a lineup and player and records role, starter state, and availability status.
+
+`ingestion_run` records source, source version, started/finished timestamps, status, row counts, error summary, and source-file hash. `team_match_statistic` and `player_match_statistic` store normalized observations with `match_id`, `ingestion_run_id`, and `observed_at`, preserving the availability time needed for leakage-safe features.
+
+## 6. Markets and Odds
+
+### 6.1 `bookmaker`
+
+- `id UUID PRIMARY KEY`
+- `name TEXT NOT NULL UNIQUE`
+- `website TEXT`
+- `is_active BOOLEAN NOT NULL DEFAULT TRUE`
+- timestamps
+
+### 6.2 `market`
+
+A market defines a betting offer for one match, independently of bookmaker quotes.
+
+- `id UUID PRIMARY KEY`
+- `match_id UUID NOT NULL REFERENCES match(id)`
+- `market_type TEXT NOT NULL CHECK (market_type IN ('1X2','over_under','correct_score','asian_handicap','both_teams_to_score'))`
+- `line_value NUMERIC(6,3)`
+- `period TEXT NOT NULL DEFAULT 'full_time'`
+- `settlement_rules_version TEXT NOT NULL`
+- timestamps
+
+Unique: `(match_id, market_type, line_value, period)` using a null-safe unique index. A line is required for over/under and Asian handicap; it is null for 1X2.
+
+### 6.3 `market_selection`
+
+Each possible outcome inside a market is a selection.
+
+- `id UUID PRIMARY KEY`
+- `market_id UUID NOT NULL REFERENCES market(id)`
+- `code TEXT NOT NULL` (for example `home`, `draw`, `away`, `over`, `under`, `score_1_0`)
+- `display_name TEXT NOT NULL`
+- `outcome_payload JSONB NOT NULL`
+- timestamps
+
+Unique: `(market_id, code)`. Application schemas validate the payload according to the market type.
+
+### 6.4 `odds_snapshot` and `odds_quote`
+
+`odds_snapshot` represents one bookmaker capture for a match:
+
+- `id UUID PRIMARY KEY`
+- `match_id UUID NOT NULL REFERENCES match(id)`
+- `bookmaker_id UUID NOT NULL REFERENCES bookmaker(id)`
+- `captured_at TIMESTAMPTZ NOT NULL`
+- `source_external_id TEXT`
+- `ingestion_run_id UUID REFERENCES ingestion_run(id)`
+- `raw_payload JSONB`
+- `payload_hash TEXT NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+Unique: `(bookmaker_id, source_external_id)` when available; otherwise `(match_id, bookmaker_id, captured_at, payload_hash)`.
+
+`odds_quote` is one quote for one market selection in a snapshot:
+
+- `id UUID PRIMARY KEY`
+- `odds_snapshot_id UUID NOT NULL REFERENCES odds_snapshot(id)`
+- `market_selection_id UUID NOT NULL REFERENCES market_selection(id)`
+- `decimal_odds NUMERIC(10,4) NOT NULL CHECK (decimal_odds > 1)`
+- `raw_implied_probability NUMERIC(10,8) NOT NULL CHECK (raw_implied_probability > 0 AND raw_implied_probability <= 1)`
+- `normalized_implied_probability NUMERIC(10,8)`
+- `is_available BOOLEAN NOT NULL DEFAULT TRUE`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+Unique: `(odds_snapshot_id, market_selection_id)`. Index snapshots by `(match_id, captured_at DESC)` and quotes by `market_selection_id`.
+
+## 7. Feature and Dataset Lineage
+
+### 7.1 `dataset_snapshot`
+
+- `id UUID PRIMARY KEY`
+- `version TEXT NOT NULL UNIQUE`
+- `purpose TEXT NOT NULL CHECK (purpose IN ('training','inference','backtest','evaluation'))`
+- `source_manifest JSONB NOT NULL`
+- `content_hash TEXT NOT NULL UNIQUE`
+- `row_count BIGINT`
+- `as_of_at TIMESTAMPTZ NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+Dataset snapshots are immutable.
+
+### 7.2 `feature`, `feature_set`, and `feature_set_feature`
+
+`feature` stores the globally unique feature name, type, definition, source contract, owner, and creation timestamp.
+
+`feature_set` stores name, immutable version, description, pipeline version, definition hash, status, and creation timestamp. Unique: `(name, version)` and `definition_hash`.
+
+`feature_set_feature` joins a feature set to its features and stores feature order, transformation definition, null-handling policy, and availability rule. Unique: `(feature_set_id, feature_id)` and `(feature_set_id, ordinal)`.
+
+### 7.3 `feature_vector`
+
+- `id UUID PRIMARY KEY`
+- `match_id UUID NOT NULL REFERENCES match(id)`
+- `feature_set_id UUID NOT NULL REFERENCES feature_set(id)`
+- `dataset_snapshot_id UUID NOT NULL REFERENCES dataset_snapshot(id)`
+- `as_of_at TIMESTAMPTZ NOT NULL`
+- `pipeline_version TEXT NOT NULL`
+- `values JSONB NOT NULL`
+- `availability JSONB NOT NULL`
+- `content_hash TEXT NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+Unique: `(match_id, feature_set_id, dataset_snapshot_id, as_of_at, content_hash)`. Vectors are immutable and validated against the referenced feature set before insertion.
+
+## 8. Model Governance and Predictions
+
+### 8.1 `model_version`
+
+- `id UUID PRIMARY KEY`
+- `name TEXT NOT NULL`
+- `version TEXT NOT NULL`
+- `family TEXT NOT NULL`
+- `status TEXT NOT NULL CHECK (status IN ('draft','staging','production','retired'))`
+- `dataset_snapshot_id UUID NOT NULL REFERENCES dataset_snapshot(id)`
+- `feature_set_id UUID NOT NULL REFERENCES feature_set(id)`
+- `artifact_uri TEXT NOT NULL`
+- `artifact_hash TEXT NOT NULL`
+- `training_parameters JSONB NOT NULL`
+- `evaluation_metrics JSONB NOT NULL`
+- `calibration_metadata JSONB`
+- `release_notes TEXT`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+- `promoted_at TIMESTAMPTZ`
+- `retired_at TIMESTAMPTZ`
+
+Unique: `(name, version)` and `artifact_hash`. A partial unique index permits one production model per approved scope. Model artifacts are never overwritten; lifecycle changes create an audit record.
+
+### 8.2 `prediction`
+
+`prediction` is an immutable run, not a mutable match summary.
+
+- `id UUID PRIMARY KEY`
+- `match_id UUID NOT NULL REFERENCES match(id)`
+- `model_version_id UUID NOT NULL REFERENCES model_version(id)`
+- `feature_vector_id UUID NOT NULL REFERENCES feature_vector(id)`
+- `dataset_snapshot_id UUID NOT NULL REFERENCES dataset_snapshot(id)`
+- `as_of_at TIMESTAMPTZ NOT NULL`
+- `status TEXT NOT NULL CHECK (status IN ('draft','published','archived','failed'))`
+- `expected_goals_home NUMERIC(10,6) NOT NULL CHECK (expected_goals_home >= 0)`
+- `expected_goals_away NUMERIC(10,6) NOT NULL CHECK (expected_goals_away >= 0)`
+- `home_probability NUMERIC(10,8) NOT NULL CHECK (home_probability BETWEEN 0 AND 1)`
+- `draw_probability NUMERIC(10,8) NOT NULL CHECK (draw_probability BETWEEN 0 AND 1)`
+- `away_probability NUMERIC(10,8) NOT NULL CHECK (away_probability BETWEEN 0 AND 1)`
+- `score_distribution JSONB NOT NULL`
+- `tail_probability NUMERIC(10,8) NOT NULL DEFAULT 0 CHECK (tail_probability BETWEEN 0 AND 1)`
+- `calibration_metadata JSONB NOT NULL`
+- `explanation_summary JSONB NOT NULL`
+- `content_hash TEXT NOT NULL UNIQUE`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+- `published_at TIMESTAMPTZ`
+
+Check: `home_probability + draw_probability + away_probability` is within the configured decimal tolerance of 1. A trigger rejects updates to published predictions; refreshing a prediction creates a new run.
+
+### 8.3 `prediction_market_probability`
+
+This table stores probabilities derived from the canonical prediction distribution:
+
+- `prediction_id UUID NOT NULL REFERENCES prediction(id)`
+- `market_selection_id UUID NOT NULL REFERENCES market_selection(id)`
+- `probability NUMERIC(10,8) NOT NULL CHECK (probability BETWEEN 0 AND 1)`
+- `derivation_version TEXT NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+Primary key: `(prediction_id, market_selection_id)`.
+
+## 9. Simulation and Backtesting
+
+### 9.1 `simulation_run`
+
+- `id UUID PRIMARY KEY`
+- `prediction_id UUID NOT NULL REFERENCES prediction(id)`
+- `scenario JSONB NOT NULL`
+- `seed BIGINT`
+- `method TEXT NOT NULL CHECK (method IN ('analytic','monte_carlo'))`
+- `iterations INTEGER CHECK (iterations > 0)`
+- `status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','cancelled'))`
+- `result JSONB`
+- `convergence_metrics JSONB`
+- `created_by_user_id UUID REFERENCES app_user(id)`
+- `created_at`, `started_at`, `completed_at`
+
+Completed runs are immutable. Index: `(prediction_id, created_at DESC)`.
+
+### 9.2 `backtest_run` and `backtest_result`
+
+`backtest_run` records `model_version_id`, `feature_set_id`, `dataset_snapshot_id`, date range, as-of and odds policies, bankroll policy, configuration, status, seed, creator, and timestamps.
+
+`backtest_result` references a run and a match, and stores the generated prediction, selected market quote, recommendation decision, stake, outcome, PnL, and per-match metrics. Unique: `(backtest_run_id, match_id, market_selection_id)`.
+
+Backtests are append-only and never modify live portfolios or bets.
+
+## 10. Portfolio and Betting
+
+### 10.1 `app_user`
+
+- `id UUID PRIMARY KEY`
+- `email TEXT NOT NULL UNIQUE`
+- `full_name TEXT NOT NULL`
+- `role TEXT NOT NULL CHECK (role IN ('analyst','manager','auditor','admin'))`
+- `auth_provider TEXT NOT NULL`
+- `provider_subject TEXT`
+- `password_hash TEXT`
+- `is_active BOOLEAN NOT NULL DEFAULT TRUE`
+- timestamps
+
+For local authentication, `password_hash` is required and passwords are never stored. For external identity providers, `(auth_provider, provider_subject)` is unique. The definitive authentication flow belongs in `07_API_SPEC.md`.
+
+### 10.2 `portfolio`
+
+`portfolio` references `owner_id`, has currency, starting/current/available capital, risk limits, timestamps, and non-negative amount checks. It has a unique `(owner_id, name)`.
+
+### 10.3 `bet`
+
+- `id UUID PRIMARY KEY`
+- `portfolio_id UUID NOT NULL REFERENCES portfolio(id)`
+- `match_id UUID NOT NULL REFERENCES match(id)`
+- `prediction_id UUID NOT NULL REFERENCES prediction(id)`
+- `market_selection_id UUID NOT NULL REFERENCES market_selection(id)`
+- `odds_quote_id UUID NOT NULL REFERENCES odds_quote(id)`
+- `stake NUMERIC(14,2) NOT NULL CHECK (stake > 0)`
+- `recommended_stake NUMERIC(14,2) NOT NULL CHECK (recommended_stake >= 0)`
+- `decimal_odds NUMERIC(10,4) NOT NULL CHECK (decimal_odds > 1)`
+- `edge NUMERIC(12,8) NOT NULL`
+- `expected_value NUMERIC(12,8) NOT NULL`
+- `kelly_fraction NUMERIC(10,8) NOT NULL CHECK (kelly_fraction >= 0)`
+- `status TEXT NOT NULL CHECK (status IN ('proposed','placed','settled','rejected','void'))`
+- `outcome TEXT CHECK (outcome IN ('won','lost','void','pending'))`
+- `pnl NUMERIC(14,2)`
+- timestamps plus `placed_at` and `settled_at`
+
+The application validates that the odds quote belongs to the same match and market selection as the bet. Index: `(portfolio_id, status)`, `(match_id)`, `(prediction_id)`, and `(market_selection_id)`.
+
+## 11. Audit and Operational Integrity
+
+### 11.1 `audit_record`
+
+- `id UUID PRIMARY KEY`
+- `entity_type TEXT NOT NULL`
+- `entity_id UUID NOT NULL`
+- `action TEXT NOT NULL`
+- `actor_user_id UUID REFERENCES app_user(id)`
+- `correlation_id UUID`
+- `payload JSONB NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+
+`audit_record` is append-only. Database roles deny `UPDATE` and `DELETE` to application accounts. Index `(entity_type, entity_id, created_at DESC)`, `(actor_user_id, created_at DESC)`, `(correlation_id)`, and GIN on `payload` only where query evidence supports it.
+
+### 11.2 Partitioning and retention
+
+Partition `audit_record` by month once volume warrants it. Partition `odds_snapshot` by captured month or season only after validating query patterns. Do not partition small operational tables prematurely. Retention and archive policies must preserve audit and model lineage requirements.
+
+## 12. Integrity, Indexes, and Migrations
+
+- Create B-tree indexes on all foreign keys and stated time-based access paths.
+- Use partial indexes for open bets, active portfolios, scheduled matches, and production-model lookup.
+- Validate JSONB payloads at application boundaries and with targeted database checks for critical keys.
+- Apply schema changes through focused Alembic migrations, including forward and rollback plans where safe.
+- Test migrations against anonymized production-like data and verify indexes, constraints, and downgrade behavior.
+- Seed only reference data required for local development; never seed production credentials or betting records.
+
+## 13. References
+
+- `02_DOMAIN_MODEL.md` for entities, aggregate ownership, and ubiquitous language.
+- `03_BUSINESS_RULES.md` for state transitions, probability integrity, audit, and portfolio constraints.
+- `04_AI_ENGINE.md` for feature lineage, prediction immutability, simulation, and model governance.
+- `06_ARCHITECTURE.md` for object storage, workers, ingestion, and deployment.
+- `07_API_SPEC.md` for resource contracts and asynchronous job behavior.
+```
