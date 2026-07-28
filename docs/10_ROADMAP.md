@@ -216,6 +216,7 @@ The roadmap is divided into six sprints: Foundation, Prediction Baseline, Portfo
 - Use feature toggles and rollback plans.
 
 ## 9. Sprint 6: Post-Launch Stabilization
+This roadmap covers Version 1.0 delivery and immediate post-launch stabilization.
 
 ### Objectives
 - Monitor production performance.
@@ -294,11 +295,3 @@ The roadmap is divided into six sprints: Foundation, Prediction Baseline, Portfo
 - `07_API_SPEC.md`
 - `08_UI_UX.md`
 - `09_DEVELOPMENT_RULES.md`
-
-## 13. References
-
-- `00_PROJECT_CHARTER.md` for high-level objectives.
-- `01_MASTER_PRD.md` for product requirements.
-- `06_ARCHITECTURE.md` for technical strategy.
-- `07_API_SPEC.md` for integration planning.
-- `08_UI_UX.md` for UX priorities.
