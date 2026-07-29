@@ -1,0 +1,143 @@
+version: "3.9"
+
+services:
+  backend:
+    container_name: ligamx-backend
+    build:
+      context: ./docker/backend
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: ${TZ}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ligamx-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    container_name: ligamx-frontend
+    build:
+      context: ./docker/frontend
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    command: >
+      sh -c "npm run dev -- --hostname 0.0.0.0"
+    restart: unless-stopped
+    networks:
+      - ligamx-network
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const http=require('http');http.get('http://127.0.0.1:3000', res => process.exit(res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1));\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    container_name: ligamx-postgres
+    image: postgres:17
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - ligamx-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    container_name: ligamx-redis
+    image: redis:8-alpine
+    environment:
+      TZ: ${TZ}
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - ligamx-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  pgadmin:
+    container_name: ligamx-pgadmin
+    image: dpage/pgadmin4:latest
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ligamx-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:80/misc/ping', timeout=5)\""]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres-data:
+  redis-data:
+  pgadmin-data:
+
+networks:
+  ligamx-network:
+    name: ligamx-network
+    driver: bridge
