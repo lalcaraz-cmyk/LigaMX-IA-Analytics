@@ -1,25 +1,24 @@
-version: "3.9"
-
 services:
   backend:
-    container_name: ligamx-backend
     build:
-      context: ./docker/backend
+      context: .
+      dockerfile: docker/backend/Dockerfile
     env_file:
       - .env
     environment:
       PYTHONUNBUFFERED: "1"
-      TZ: ${TZ}
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ:-UTC}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/ligamx}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      POSTGRES_DB: ${POSTGRES_DB:-ligamx}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - ./backend:/app
+      - backend-venv:/app/.venv
     ports:
       - "8000:8000"
-    command: >
+    command: >-
       sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       postgres:
@@ -37,41 +36,40 @@ services:
       start_period: 20s
 
   frontend:
-    container_name: ligamx-frontend
     build:
-      context: ./docker/frontend
+      context: .
+      dockerfile: docker/frontend/Dockerfile
     env_file:
       - .env
     environment:
-      TZ: ${TZ}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      TZ: ${TZ:-UTC}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://backend:8000}
     volumes:
       - ./frontend:/app
       - /app/node_modules
     ports:
       - "3000:3000"
-    command: >
+    command: >-
       sh -c "npm run dev -- --hostname 0.0.0.0"
     restart: unless-stopped
     networks:
       - ligamx-network
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"const http=require('http');http.get('http://127.0.0.1:3000', res => process.exit(res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1));\""]
+      test: ["CMD-SHELL", "node -e \"const http=require('http');http.get('http://127.0.0.1:3000', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1));\""]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 20s
 
   postgres:
-    container_name: ligamx-postgres
     image: postgres:17
     env_file:
       - .env
     environment:
-      TZ: ${TZ}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ:-UTC}
+      POSTGRES_DB: ${POSTGRES_DB:-ligamx}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
@@ -80,17 +78,18 @@ services:
     networks:
       - ligamx-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U \"${POSTGRES_USER:-postgres}\" -d \"${POSTGRES_DB:-ligamx}\""]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
   redis:
-    container_name: ligamx-redis
     image: redis:8-alpine
+    env_file:
+      - .env
     environment:
-      TZ: ${TZ}
+      TZ: ${TZ:-UTC}
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -107,14 +106,13 @@ services:
       start_period: 5s
 
   pgadmin:
-    container_name: ligamx-pgadmin
     image: dpage/pgadmin4:latest
     env_file:
       - .env
     environment:
-      TZ: ${TZ}
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      TZ: ${TZ:-UTC}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
     volumes:
       - pgadmin-data:/var/lib/pgadmin
     ports:
@@ -136,6 +134,7 @@ volumes:
   postgres-data:
   redis-data:
   pgadmin-data:
+  backend-venv:
 
 networks:
   ligamx-network:
