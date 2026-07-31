@@ -18,10 +18,7 @@ app: FastAPI = FastAPI(
     license_info={"name": "MIT"},
 )
 
-app.include_router(
-    api_router,
-    prefix=settings.API_V1_PREFIX,
-)
+app.include_router(api_router)
 
 # Middleware
 
