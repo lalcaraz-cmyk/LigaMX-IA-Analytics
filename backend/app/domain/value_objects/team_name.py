@@ -2,10 +2,11 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from app.domain.exceptions import EntityValidationError
+from app.domain.value_objects.base import ValueObject
 
 
 @dataclass(frozen=True, slots=True)
-class TeamName:
+class TeamName(ValueObject):
     """Value object representing a football team name."""
 
     _MIN_LENGTH: ClassVar[int] = 2
